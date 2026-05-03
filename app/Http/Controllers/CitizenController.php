@@ -18,9 +18,8 @@ class CitizenController extends Controller
 
     public function getAllMedicines(Request $request)
     {
-        $user = auth('sanctum')->user();
+        $user = auth()->user();
 
-        // جلب الأدوية مع معلومات الصيدلية والمحافظة
         $query = Medicine::with(['pharmacy.user'])
             ->where('expiration_date', '>', now()->toDateString())
             ->where('quantity_available', '>', 0);
@@ -29,12 +28,10 @@ class CitizenController extends Controller
             $query->where('category', $request->category);
         }
 
-        // إذا أرسل المستخدم محافظة معينة نفلتر بها وإذا لم يرسل نظهر له أدوية محافظته المسجلة افتراضياً
         $targetGovernorate = $request->governorate ?? ($user ? $user->governorate : null);
 
         if ($targetGovernorate) {
             $formattedGov = ucwords(strtolower(str_replace('_', ' ', $targetGovernorate)));
-
             $query->whereHas('pharmacy', function ($q) use ($formattedGov) {
                 $q->where('governorate', $formattedGov);
             });
@@ -48,17 +45,18 @@ class CitizenController extends Controller
             $query->where('pharmacy_id', $request->pharmacy_id);
         }
 
-        $medicines = $query->orderBy('expiration_date', 'asc')->get();
+        $medicines = $query->select('id', 'name', 'price', 'image', 'category', 'requires_prescription', 'pharmacy_id')
+            ->orderBy('expiration_date', 'asc')
+            ->get();
 
         $categoryLabel = $request->category === 'cosmetic' ? __('citizen.cosmetics') : __('citizen.medicines');
 
-        // معالجة ترجمة اسم المحافظة المعروضة في الرسالة
-        $locKey = $targetGovernorate ? strtolower(str_replace([' ', '-'], '_', $targetGovernorate)) : null;
-        $locationLabel = $locKey ? __("governorates.{$locKey}") : __('citizen.your_area');
-
-
         if ($medicines->isEmpty()) {
-            return $this->SuccessResponse([], __('citizen.no_medicines', ['location' => $locationLabel, 'categoryLabel' => $categoryLabel]), 200);
+            $location = $targetGovernorate
+                ? __('governorates.' . strtolower(str_replace([' ', '-'], '_', $targetGovernorate)))
+                : __('citizen.your_area');
+
+            return $this->SuccessResponse([], __('citizen.no_medicines', ['categoryLabel' => $categoryLabel, 'location' => $location]), 200);
         }
 
         return $this->SuccessResponse($medicines, __('citizen.get_medicines', ['categoryLabel' => $categoryLabel]), 200);
@@ -79,7 +77,7 @@ class CitizenController extends Controller
             'pharmacy_id' => 'required|integer|exists:pharmacies,id',
             'customer_name' => 'required|string|max:255',
             'phone_number' => 'required|string',
-            'address' => 'required|string', // عنوان الشارع بالتفصيل
+            'address' => 'required|string',
             'governorate' => 'required|in:Damascus,Aleppo,Homs,Hama,Lattakia,Tartous,Daraa,Deir ez-Zor,Hasakah,Raqqa,Suwayda,Quneitra,Rif Dimashq',
             'payment_method' => 'required|in:electronic,cash',
             'coupon_code' => 'nullable|string',
@@ -89,7 +87,6 @@ class CitizenController extends Controller
         ]);
 
         if ($validation->fails()) {
-
             return $this->ErrorResponse($validation->errors(), 422);
         }
 
@@ -103,42 +100,41 @@ class CitizenController extends Controller
                 ->first();
 
             if (!$coupon) {
-                return $this->ErrorResponse(__('coupon.invalid_or_used'), 422);
+                return $this->ErrorResponse(__('citizen.invalid_coupon'), 422);
             }
         }
 
         try {
             $data = DB::transaction(function () use ($user, $request, $coupon) {
-
                 $cosmeticsSubtotal = 0;
                 $medicinesSubtotal = 0;
                 $itemsToCreate = [];
                 $pharmacyUserId = null;
 
-
                 foreach ($request->items as $itemData) {
                     $medicine = Medicine::lockForUpdate()->find($itemData['medicine_id']);
                     $pharmacyUserId = $medicine->pharmacy->user_id;
 
+                    if ($medicine->requires_prescription) {
+                        throw new \Exception(__('citizen.prescription_required', ['name' => $medicine->name]));
+                    }
 
                     if ($medicine->quantity_available < $itemData['desired_quantity']) {
-                        throw new \Exception(__('citizen.quantity_unavailable', ['name' => $medicine->name]));
+                        throw new \Exception(__('citizen.quantity_unavailable', ['count' => $medicine->quantity_available]));
                     }
 
                     $itemTotalPrice = $medicine->price * $itemData['desired_quantity'];
-
                     if ($medicine->category === 'cosmetic') {
                         $cosmeticsSubtotal += $itemTotalPrice;
                     } else {
                         $medicinesSubtotal += $itemTotalPrice;
                     }
 
-                    // تجهيز البيانات لإنشائها لاحقاً
                     $itemsToCreate[] = [
                         'medicine_id' => $medicine->id,
                         'desired_quantity' => $itemData['desired_quantity'],
                         'total_price' => $itemTotalPrice,
-                        'medicine_model' => $medicine // نحتفظ بالمودل لنخصم منه لاحقاً
+                        'medicine_model' => $medicine
                     ];
                 }
 
@@ -163,18 +159,15 @@ class CitizenController extends Controller
                     'delivery_approval_status' => 'pending'
                 ]);
 
-                // إنشاء العناصر وخصم الكمية
                 foreach ($itemsToCreate as $item) {
                     $newOrder->orderItems()->create([
                         'medicine_id' => $item['medicine_id'],
                         'desired_quantity' => $item['desired_quantity'],
                         'total_price' => $item['total_price']
                     ]);
-
                     $item['medicine_model']->decrement('quantity_available', $item['desired_quantity']);
                 }
 
-                // إنشاء الدفع
                 $payment = $newOrder->payment()->create([
                     'payment_method' => $request->payment_method,
                     'amount' => $finalOrderTotal,
@@ -221,6 +214,7 @@ class CitizenController extends Controller
                 'payment_details' => $data['payment_details'],
                 'savings' => $data['discount_amount']
             ], __('citizen.create_order_success'), 201);
+
         } catch (\Exception $e) {
             return $this->ErrorResponse(__('citizen.process_failed') . $e->getMessage(), 500);
         }
@@ -229,7 +223,6 @@ class CitizenController extends Controller
     public function cancelOrder(FcmService $fcmService, Request $request)
     {
         $user = auth()->user();
-
         if (!$user) {
             return $this->ErrorResponse(__('admin.unauthorized'), 401);
         }
@@ -242,7 +235,7 @@ class CitizenController extends Controller
             return $this->ErrorResponse($validation->errors()->first(), 422);
         }
 
-        $order = Order::with(['orderItems', 'payment'])
+        $order = Order::with(['orderItems', 'payment', 'pharmacy'])
             ->where('id', $request->order_id)
             ->where('user_id', $user->id)
             ->first();
@@ -257,12 +250,11 @@ class CitizenController extends Controller
 
         try {
             $data = DB::transaction(function () use ($order, $user) {
-                // إعادة الكميات للمخزن
                 foreach ($order->orderItems as $item) {
                     Medicine::where('id', $item->medicine_id)
                         ->increment('quantity_available', $item->desired_quantity);
                 }
-                // تحديث حالة الطلب
+
                 $order->update(['order_status' => 'cancelled']);
 
                 if ($order->coupon_code) {
@@ -272,15 +264,12 @@ class CitizenController extends Controller
                         ->update(['is_used' => false]);
                 }
 
-                // تحديث حالة الدفع إن وجدت
                 if ($order->payment) {
-                    $newStatus = ($order->payment->payment_method === 'electronic') ? 'failed' : 'failed';
-                    $order->payment->update(['payment_status' => $newStatus]);
+                    $order->payment->update(['payment_status' => 'failed']);
                 }
 
                 $title = __('citizen.cancel_title', ['name' => $user->username]);
                 $message = __('citizen.cancel_message', ['name' => $user->username, 'orderId' => $order->id]);
-
                 $pharmacistUserId = $order->pharmacy->user_id;
 
                 Notification::create([
@@ -317,7 +306,6 @@ class CitizenController extends Controller
     public function getMyOrderHistory(Request $request)
     {
         $user = auth()->user();
-
         if (!$user) {
             return $this->ErrorResponse(__('admin.unauthorized'), 401);
         }
@@ -330,7 +318,6 @@ class CitizenController extends Controller
             return $this->ErrorResponse($validation->errors(), 422);
         }
 
-        // جلب الطلبات مع العلاقات الأساسية
         $query = Order::with(['orderItems.medicine', 'pharmacy.user', 'payment'])
             ->where('user_id', $user->id)
             ->latest();
@@ -339,12 +326,7 @@ class CitizenController extends Controller
             $query->where('order_status', $request->status);
         }
 
-        $orders = $query->get()->map(function ($order) {
-            // ترجمة المحافظة في سجل الطلبات
-            $govKey = strtolower(str_replace([' ', '-'], '_', $order->governorate));
-            $order->translated_governorate = __("governorates.{$govKey}");
-            return $order;
-        });
+        $orders = $query->get();
 
         if ($orders->isEmpty()) {
             return $this->SuccessResponse([], __('citizen.havent_orders'), 200);
@@ -352,7 +334,7 @@ class CitizenController extends Controller
 
         $formattedHistory = [
             'active_orders' => $orders->whereIn('order_status', ['pending', 'in_process', 'picked_up'])->values(),
-            'past_orders' => $orders->whereIn('order_status', ['delivered', 'cancelled'])->values(),
+            'past_orders'   => $orders->whereIn('order_status', ['delivered', 'cancelled'])->values(),
         ];
 
         return $this->SuccessResponse($formattedHistory, __('citizen.order_retrieved'), 200);
@@ -361,14 +343,12 @@ class CitizenController extends Controller
     public function getMyCoupons()
     {
         $user = auth()->user();
-
         if (!$user) {
             return $this->ErrorResponse(__('admin.unauthorized'), 401);
         }
 
-        // جلب الكوبونات غير المستخدمة والتي لم تنته صلاحيتها بعد
         $coupons = Coupon::with(['pharmacy' => function ($query) {
-            $query->select('id', 'username', 'role'); // username هنا يمثل اسم الصيدلية حسب هيكلية جدول المستخدمين
+            $query->select('id', 'pharmacy_name');
         }])
             ->where('user_id', $user->id)
             ->where('is_used', false)
@@ -377,7 +357,7 @@ class CitizenController extends Controller
             ->get();
 
         if ($coupons->isEmpty()) {
-            return $this->SuccessResponse([], __('coupon.no_coupons_found'), 200);
+            return $this->SuccessResponse([], __('citizen.no_coupons'), 200);
         }
 
         $coupons->map(function ($coupon) {
@@ -385,6 +365,50 @@ class CitizenController extends Controller
             return $coupon;
         });
 
-        return $this->SuccessResponse($coupons, __('coupon.retrieved_success'), 200);
+        return $this->SuccessResponse($coupons, __('citizen.coupons_retrieved'), 200);
+    }
+
+    public function toggleFavorite(Request $request)
+    {
+        $user = auth()->user();
+        if (!$user) {
+            return $this->ErrorResponse(__('admin.unauthorized'), 401);
+        }
+
+        $validation = Validator::make($request->all(), [
+            'medicine_id' => 'required|integer|exists:medicines,id',
+        ]);
+
+        if ($validation->fails()) {
+            return $this->ErrorResponse($validation->errors(), 422);
+        }
+
+        $status = $user->favorites()->toggle($request->medicine_id);
+
+        $message = count($status['attached']) > 0
+            ? __('citizen.favorite_added')
+            : __('citizen.favorite_removed');
+
+        return $this->SuccessResponse(null, $message, 200);
+    }
+
+    public function getMyFavorites()
+    {
+        $user = auth()->user();
+        if (!$user) {
+            return $this->ErrorResponse(__('admin.unauthorized'), 401);
+        }
+
+        $favorites = $user->favorites()
+            ->with('pharmacy:id,pharmacy_name')
+            ->select('medicines.id', 'name', 'price', 'image', 'category', 'requires_prescription')
+            ->latest()
+            ->get();
+
+        if ($favorites->isEmpty()) {
+            return $this->SuccessResponse([], __('citizen.no_favorites'), 200);
+        }
+
+        return $this->SuccessResponse($favorites, __('citizen.favorites_fetched'), 200);
     }
 }

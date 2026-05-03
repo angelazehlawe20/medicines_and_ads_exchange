@@ -36,7 +36,7 @@ class AdminController extends Controller
                 'published' => ExchangeAd::where('is_showing', 1)->count(),
                 'pending_verification' => ExchangeAd::whereNull('security_check_status')->count(),
                 'completed_exchanges' => ExchangeAd::where('is_showing', 0)->where('security_check_status', 1)->count(),
-                'rejected_ads' => ExchangeAd::where('security_check_status', 0)->count(), // إعلانات مرفوضة لأسباب طبية
+                'rejected_ads' => ExchangeAd::where('security_check_status', 0)->count(),
             ],
             'orders_stats' => [
                 'total_orders' => Order::count(),
@@ -47,7 +47,6 @@ class AdminController extends Controller
             ],
             'financial_overview' => [
                 'total_paid_orders' => Payment::where('payment_status', 'paid')->count(),
-                // تجميع الإيرادات حسب العملة (لا تظهره كمجموع واحد لضمان الدقة)
                 'revenue_by_currency' => Payment::where('payment_status', 'paid')
                     ->select('currency', DB::raw('SUM(amount) as total'))
                     ->groupBy('currency')
@@ -56,14 +55,7 @@ class AdminController extends Controller
             'activity_by_governorate' => User::select('governorate', DB::raw('count(*) as count'))
                 ->groupBy('governorate')
                 ->orderBy('count', 'desc')
-                ->get()
-                ->map(function ($item) {
-                    $govKey = strtolower(str_replace([' ', '-'], '_', $item->governorate));
-                    return [
-                        'governorate' => __("governorates.{$govKey}"),
-                        'count' => $item->count
-                    ];
-                }),
+                ->get(),
         ];
 
         return $this->SuccessResponse($stats, __('admin.dashboard'), 200);
@@ -85,11 +77,8 @@ class AdminController extends Controller
         }
 
         $role = $request->role;
-
-        // جلب المستخدمين مع فحص وجود العلاقة
         $query = User::where('role', $role);
 
-        // تأكد أن لديك علاقة في مودل User بهذا الاسم، وإلا قم بإزالة هذا الشرط
         if (method_exists(User::class, $role)) {
             $query->with($role);
         }
@@ -125,18 +114,17 @@ class AdminController extends Controller
             return $this->ErrorResponse(__('admin.error_my_status'), 403);
         }
 
-        // تحويل القيمة إلى Boolean صريح للمقارنة
         $newStatus = filter_var($request->status, FILTER_VALIDATE_BOOLEAN);
 
         if ($user->account_status == $newStatus) {
-            $currentStatusText = $newStatus ? 'admin.active' : 'admin.suspended';
-            return $this->ErrorResponse(__('admin.status_already_set', ['status' => $currentStatusText]), 400);
+            $statusLabel = $newStatus ? __('admin.active') : __('admin.suspended');
+            return $this->ErrorResponse(__('admin.status_already_set', ['status' => $statusLabel]), 400);
         }
 
         $user->update(['account_status' => $request->status]);
 
-        $msg = $request->status ? 'admin.activated' : 'admin.suspended';
-        return $this->SuccessResponse($user, __('admin.status_updated', ['status' => $msg]), 200);
+        $statusAction = $request->status ? __('admin.activated') : __('admin.suspended');
+        return $this->SuccessResponse($user, __('admin.status_updated', ['status' => $statusAction]), 200);
     }
 
     public function manageExchangeAds(Request $request)
@@ -183,7 +171,6 @@ class AdminController extends Controller
         }
 
         $search = $request->search;
-
         $users = User::where('username', 'like', "%$search%")
             ->orWhere('phone', 'like', "%$search%")
             ->limit(10)
@@ -192,8 +179,8 @@ class AdminController extends Controller
         if ($users->isEmpty()) {
             return $this->SuccessResponse([], __('admin.no_results', ['query' => $search]), 200);
         }
-        $count = $users->count();
-        return $this->SuccessResponse($users, __('admin.search_results', ['count' => $count]), 200);
+
+        return $this->SuccessResponse($users, __('admin.search_results', ['count' => $users->count()]), 200);
     }
 
     public function searchMedicineInAds(Request $request)
@@ -212,7 +199,6 @@ class AdminController extends Controller
         }
 
         $search = $request->search;
-
         $ads = ExchangeAd::where('medicine_name', 'like', "%$search%")
             ->limit(10)
             ->get();
@@ -221,8 +207,7 @@ class AdminController extends Controller
             return $this->SuccessResponse([], __('admin.no_results', ['query' => $search]), 200);
         }
 
-        $count = $ads->count();
-        return $this->SuccessResponse($ads, __('admin.search_results', ['count' => $count]), 200);
+        return $this->SuccessResponse($ads, __('admin.search_results', ['count' => $ads->count()]), 200);
     }
 
     public function addUser(Request $request)
@@ -233,7 +218,6 @@ class AdminController extends Controller
         }
 
         if ($request->has('governorate')) {
-            // تحويل "homs" إلى "Homs" أو "rif dimashq" إلى "Rif Dimashq"
             $request->merge([
                 'governorate' => ucwords(strtolower($request->governorate))
             ]);
@@ -248,12 +232,8 @@ class AdminController extends Controller
             'governorate' => 'required|in:Damascus,Aleppo,Homs,Hama,Lattakia,Tartous,Daraa,Deir ez-Zor,Hasakah,Raqqa,Suwayda,Quneitra,Rif Dimashq',
         ];
 
-        if ($request->role === 'citizen') {
-            $rules['address'] = 'required|string';
-        }
-        if ($request->role === 'pharmacy') {
-            $rules['pharmacy_name'] = 'required|string';
-        }
+        if ($request->role === 'citizen') $rules['address'] = 'required|string';
+        if ($request->role === 'pharmacy') $rules['pharmacy_name'] = 'required|string';
         if ($request->role === 'specialist') {
             $rules['pharmacy_name'] = 'required|string';
             $rules['pharmacy_address'] = 'required|string';
@@ -264,33 +244,22 @@ class AdminController extends Controller
 
         try {
             return DB::transaction(function () use ($request) {
-                $governorate = strtolower(str_replace([' ', '-'], '_', $request->governorate));
+                $governorateValue = strtolower(str_replace([' ', '-'], '_', $request->governorate));
                 $user = User::create([
                     'username' => $request->username,
                     'password' => bcrypt($request->password),
                     'email' => $request->email,
                     'phone' => $request->phone,
                     'role' => $request->role,
-                    'governorate' => $governorate,
+                    'governorate' => $governorateValue,
                     'account_status' => 1
                 ]);
 
-                if ($request->role === 'citizen') {
-                    $user->citizen()->create(['address' => $request->address]);
-                } elseif ($request->role === 'pharmacy') {
-                    $user->pharmacy()->create(['pharmacy_name' => $request->pharmacy_name, 'governorate' => $request->governorate]);
-                } elseif ($request->role === 'specialist') {
-                    $user->specialist()->create(['pharmacy_name' => $request->pharmacy_name, 'pharmacy_address' => $request->pharmacy_address, 'governorate' => $request->governorate]);
-                } elseif ($request->role === 'delivery') {
-                    $user->delivery()->create(['governorate' => $request->governorate, 'availability_status' => 0]);
-                } elseif ($request->role === 'admin') {
-                    $user->admin()->create();
-                }
-
-                // إضافة اسم المحافظة المترجم للرد فقط دون التأثير على قاعدة البيانات
-                // نستخدم str_replace لتبديل الفراغات بـ _ لتطابق مفاتيح ملف الترجمة (مثل Deir ez-Zor تصبح deir_ez_zor)
-                $govKey = strtolower(str_replace([' ', '-'], '_', $user->governorate));
-                $user->translated_governorate = __("governorates.{$govKey}");
+                if ($request->role === 'citizen') $user->citizen()->create(['address' => $request->address]);
+                elseif ($request->role === 'pharmacy') $user->pharmacy()->create(['pharmacy_name' => $request->pharmacy_name, 'governorate' => $request->governorate]);
+                elseif ($request->role === 'specialist') $user->specialist()->create(['pharmacy_name' => $request->pharmacy_name, 'pharmacy_address' => $request->pharmacy_address, 'governorate' => $request->governorate]);
+                elseif ($request->role === 'delivery') $user->delivery()->create(['governorate' => $request->governorate, 'availability_status' => 0]);
+                elseif ($request->role === 'admin') $user->admin()->create();
 
                 return $this->SuccessResponse($user->load($request->role), __('admin.add_user'), 201);
             });
@@ -306,12 +275,8 @@ class AdminController extends Controller
             return $this->ErrorResponse(__('admin.unauthorized'), 401);
         }
 
-        $validator = Validator::make($request->all(), [
-            'user_id' => 'required|integer|exists:users,id'
-        ]);
-        if ($validator->fails()) {
-            return $this->ErrorResponse($validator->errors(), 422);
-        }
+        $validator = Validator::make($request->all(), ['user_id' => 'required|integer|exists:users,id']);
+        if ($validator->fails()) return $this->ErrorResponse($validator->errors(), 422);
 
         $user = User::find($request->user_id);
 

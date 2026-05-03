@@ -3,7 +3,9 @@
 namespace App\Http\Controllers;
 
 use App\Models\Medicine;
+use App\Models\Notification;
 use App\Models\Pharmacy;
+use App\Services\FcmService;
 use App\Traits\ShefaaTrait;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
@@ -13,10 +15,10 @@ class MedicineController extends Controller
 {
     use ShefaaTrait;
 
-    public function addMedicine(Request $request)
+    public function addMedicine(FcmService $fcmService, Request $request)
     {
         $user = auth()->user();
-        if (!$user) {
+        if (! $user) {
             return $this->ErrorResponse(__('admin.unauthorized'), 401);
         }
 
@@ -26,19 +28,18 @@ class MedicineController extends Controller
             'image' => 'nullable|image|mimes:png,jpg,jpeg|max:2048',
             'quantity_available' => 'required|integer|min:0',
             'expiration_date' => 'required|date|after:today',
-            'category' => 'required|in:medicine,cosmetic',
             'description' => 'nullable|string',
             'category' => 'required|in:medicine,cosmetic',
+            'requires_prescription' => 'required|boolean',
         ]);
 
         if ($validation->fails()) {
             return $this->ErrorResponse($validation->errors(), 422);
         }
 
-        // جلب بروفايل الصيدلية المرتبط بالمستخدم الحالي
         $pharmacy = Pharmacy::where('user_id', $user->id)->first();
 
-        if (!$pharmacy) {
+        if (! $pharmacy) {
             return $this->ErrorResponse(__('medicine.no_pharmcy_found'), 404);
         }
 
@@ -46,7 +47,7 @@ class MedicineController extends Controller
         if ($request->hasFile('image')) {
             $folderName = ($request->category === 'cosmetic') ? 'cosmetics' : 'medicines';
             $path = $request->file('image')->store($folderName, 'public');
-            $imagePath = asset('storage/' . $path);
+            $imagePath = asset('storage/'.$path);
         }
 
         $medicine = Medicine::create([
@@ -56,9 +57,17 @@ class MedicineController extends Controller
             'image' => $imagePath,
             'quantity_available' => $request->quantity_available,
             'expiration_date' => $request->expiration_date,
-            'category' => $request->category,
             'description' => $request->description,
             'category' => $request->category,
+            'requires_prescription' => $request->requires_prescription,
+        ]);
+
+        Notification::create([
+            'user_id' => $user->id,
+            'related_id' => $medicine->id,
+            'related_type' => 'medicine_added',
+            'title' => __('medicine.added_title'),
+            'message' => __('medicine.added_success_msg', ['name' => $medicine->name]),
         ]);
 
         return $this->SuccessResponse($medicine, __('medicine.added_success'), 201);
@@ -67,7 +76,7 @@ class MedicineController extends Controller
     public function updateMedicine(Request $request)
     {
         $user = auth()->user();
-        if (!$user) {
+        if (! $user) {
             return $this->ErrorResponse(__('admin.unauthorized'), 401);
         }
 
@@ -77,9 +86,10 @@ class MedicineController extends Controller
             'price' => 'sometimes|numeric|min:0',
             'image' => 'sometimes|image|mimes:png,jpg,jpeg|max:2048',
             'quantity_available' => 'sometimes|integer|min:0',
+            'description' => 'sometimes|string',
             'expiration_date' => 'sometimes|date|after:today',
             'category' => 'sometimes|in:medicine,cosmetic',
-            'description' => 'sometimes|string'
+            'requires_prescription' => 'sometimes|boolean',
         ]);
 
         if ($validation->fails()) {
@@ -88,7 +98,7 @@ class MedicineController extends Controller
 
         $pharmacy = Pharmacy::where('user_id', $user->id)->first();
 
-        if (!$pharmacy) {
+        if (! $pharmacy) {
             return $this->ErrorResponse(__('medicine.no_pharmcy_found'), 404);
         }
 
@@ -96,23 +106,22 @@ class MedicineController extends Controller
             ->where('pharmacy_id', $pharmacy->id)
             ->first();
 
-        if (!$medicine) {
-            return $this->ErrorResponse(__('medicine.not_found_in_inv'), 404);
+        if (! $medicine) {
+            return $this->ErrorResponse(__('medicine.med_not_found'), 404);
         }
 
-        $updateData = $request->only(['name', 'price', 'category', 'expiration_date', 'quantity_available', 'description']);
+        $updateData = $request->only(['name', 'price', 'category', 'expiration_date', 'quantity_available', 'description', 'requires_prescription']);
 
         if ($request->hasFile('image')) {
-            // حذف الصورة القديمة من التخزين لتوفير المساحة
             if ($medicine->image) {
                 $oldPath = str_replace(asset('storage/'), '', $medicine->image);
                 Storage::disk('public')->delete($oldPath);
             }
 
             $category = $request->category ?? $medicine->category;
-            $folderName = ($category === 'cosmetic') ? 'cosmetics' : 'medicines';
+            $folderName = ($category === 'cosmetic') ? __('citizen.cosmetics') : __('citizen.medicines');
             $path = $request->file('image')->store($folderName, 'public');
-            $updateData['image'] = asset('storage/' . $path);
+            $updateData['image'] = asset('storage/'.$path);
         }
 
         $medicine->update($updateData);
@@ -123,12 +132,12 @@ class MedicineController extends Controller
     public function deleteMedicine(Request $request)
     {
         $user = auth()->user();
-        if (!$user) {
+        if (! $user) {
             return $this->ErrorResponse(__('admin.unauthorized'), 401);
         }
 
         $validation = Validator::make($request->all(), [
-            'medicine_id' => 'required|integer|exists:medicines,id'
+            'medicine_id' => 'required|integer|exists:medicines,id',
         ]);
 
         if ($validation->fails()) {
@@ -137,7 +146,7 @@ class MedicineController extends Controller
 
         $pharmacy = Pharmacy::where('user_id', $user->id)->first();
 
-        if (!$pharmacy) {
+        if (! $pharmacy) {
             return $this->ErrorResponse(__('medicine.no_pharmcy_found'), 404);
         }
 
@@ -145,7 +154,7 @@ class MedicineController extends Controller
             ->where('pharmacy_id', $pharmacy->id)
             ->first();
 
-        if (!$medicine) {
+        if (! $medicine) {
             return $this->ErrorResponse(__('medicine.not_found_in_inv'), 404);
         }
 

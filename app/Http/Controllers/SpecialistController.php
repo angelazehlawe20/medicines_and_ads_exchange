@@ -19,13 +19,13 @@ class SpecialistController extends Controller
     {
         $user = auth()->user();
 
-        if (!$user) {
+        if (! $user) {
             return $this->ErrorResponse(__('admin.unauthorized'), 401);
         }
 
         $specialist = Specialist::where('user_id', $user->id)->first();
 
-        if (!$specialist) {
+        if (! $specialist) {
             return $this->ErrorResponse(__('specialist.specialist_not_found'), 404);
         }
 
@@ -38,6 +38,7 @@ class SpecialistController extends Controller
         if ($pendingAds->isEmpty()) {
             return $this->SuccessResponse([], __('specialist.no_pending_ads'), 200);
         }
+
         return $this->SuccessResponse($pendingAds, __('specialist.pending_ads'), 200);
     }
 
@@ -45,31 +46,30 @@ class SpecialistController extends Controller
     {
         $user = auth()->user();
 
-        if (!$user) {
+        $isRoleSpecialist = ($user->role === 'specialist');
+        $isPharmacistSpecialist = ($user->role === 'pharmacy' && $user->pharmacy && $user->pharmacy->is_specialist === true);
+
+        if (! $isRoleSpecialist && ! $isPharmacistSpecialist) {
             return $this->ErrorResponse(__('admin.unauthorized'), 401);
         }
 
         $validation = Validator::make($request->all(), [
             'ad_id' => 'required|integer|exists:exchange_ads,id',
             'status' => 'required|boolean',
-            'notes'  => 'nullable|string|max:500'
+            'notes' => 'nullable|string|max:500',
         ]);
 
         if ($validation->fails()) {
             return $this->ErrorResponse($validation->errors(), 422);
         }
 
-        $specialist = Specialist::where('user_id', $user->id)->first();
-
-        if (!$specialist) {
-            return $this->ErrorResponse(__('specialist.specialist_not_found'), 404);
-        }
+        $assignedId = $isPharmacistSpecialist ? $user->pharmacy->id : $user->specialist->id;
 
         $ad = ExchangeAd::where('id', $request->ad_id)
-            ->where('specialist_id', $specialist->id)
+            ->where('specialist_id', $assignedId)
             ->first();
 
-        if (!$ad) {
+        if (! $ad) {
             return $this->ErrorResponse(__('specialist.notFound_notAssigned'), 404);
         }
 
@@ -81,8 +81,8 @@ class SpecialistController extends Controller
             $data = DB::transaction(function () use ($ad, $request) {
                 $ad->update([
                     'security_check_status' => $request->status ? 1 : 0,
-                    'notes' => $request->notes ?? $ad->notes,
-                    'is_showing' => $request->status ? 1 : 0
+                    'notes' => $request->notes ?? ($request->status ? __('specialist.verify') : __('specialist.rejected')),
+                    'is_showing' => $request->status ? 1 : 0,
                 ]);
 
                 $title = $request->status ? __('specialist.ad_approved') : __('specialist.ad_rejected');
@@ -93,7 +93,7 @@ class SpecialistController extends Controller
                 Notification::create([
                     'user_id' => $ad->user_id,
                     'related_id' => $ad->id,
-                    'related_ad' => 'specialist_reply',
+                    'related_type' => 'specialist_reply',
                     'title' => $title,
                     'message' => $message
                 ]);
@@ -114,7 +114,9 @@ class SpecialistController extends Controller
                     'related_type' => 'specialist_reply'
                 ]
             );
+
             $statusMessage = $request->status ? __('specialist.verify') : __('specialist.rejected');
+
             return $this->SuccessResponse($ad, __('specialist.status_updated_success', ['statusMessage' => $statusMessage]), 200);
         } catch (\Exception $e) {
             return $this->ErrorResponse(__('specialist.error_processing') . $e->getMessage(), 500);
@@ -125,18 +127,18 @@ class SpecialistController extends Controller
     {
         $user = auth()->user();
 
-        if (!$user) {
+        if (! $user) {
             return $this->ErrorResponse(__('admin.unauthorized'), 401);
         }
 
         $specialist = Specialist::where('user_id', $user->id)->first();
 
-        if (!$specialist) {
+        if (! $specialist) {
             return $this->ErrorResponse(__('specialist.specialist_not_found'), 404);
         }
 
         $validation = Validator::make($request->all(), [
-            'ad_id' => 'required|integer|exists:exchange_ads,id'
+            'ad_id' => 'required|integer|exists:exchange_ads,id',
         ]);
 
         if ($validation->fails()) {
@@ -148,7 +150,7 @@ class SpecialistController extends Controller
             ->where('security_check_status', true)
             ->first();
 
-        if (!$ad) {
+        if (! $ad) {
             return $this->ErrorResponse(__('specialist.ad_notFound_notVerified'), 404);
         }
 
@@ -157,7 +159,7 @@ class SpecialistController extends Controller
         }
 
         $ad->update([
-            'is_showing' => 0
+            'is_showing' => 0,
         ]);
 
         return $this->SuccessResponse($ad, __('specialist.has_been_marked'), 200);
@@ -167,7 +169,7 @@ class SpecialistController extends Controller
     {
         $user = auth()->user();
 
-        if (!$user) {
+        if (! $user) {
             return $this->ErrorResponse(__('admin.unauthorized'), 401);
         }
 
@@ -175,10 +177,10 @@ class SpecialistController extends Controller
 
         $history = ExchangeAd::with('user:id,username')
             ->where('specialist_id', $specialist->id)
-            ->whereNotNull('security_check_status') // الإعلانات التي تم اتخاذ قرار بشأنها
+            ->whereNotNull('security_check_status')
             ->latest()
             ->get();
 
-        return $this->SuccessResponse($history, __('specialist.specialist_action_history'));
+        return $this->SuccessResponse($history, __('specialist.specialist_action_history'), 200);
     }
 }

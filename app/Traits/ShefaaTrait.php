@@ -4,8 +4,6 @@ namespace App\Traits;
 
 use App\Models\Coupon;
 use App\Models\Delivery;
-use App\Services\FcmService;
-use App\Models\Notification;
 use App\Models\Order;
 
 trait ShefaaTrait
@@ -27,7 +25,7 @@ trait ShefaaTrait
         ], $code);
     }
 
-    protected function autoAssignDelivery(FcmService $fcmService, $order, $excludeUserId = null)
+    protected function autoAssignDelivery($order, $excludeUserId = null)
     {
         $query = Delivery::where('availability_status', 1)
             ->where('governorate', $order->governorate);
@@ -44,27 +42,6 @@ trait ShefaaTrait
                 'delivery_approval_status' => 'assigned',
             ]);
 
-            $title = __('delivery.traitTitle');
-            $message = __('delivery.traitMessage', ['orderId' => $order->id, 'governorate' => __("governorates." . strtolower(str_replace([' ', '-'], '_', $order->governorate)))]);
-
-            Notification::create([
-                'user_id' => $deliveryGuy->user_id,
-                'related_id' => $order->id,
-                'related_type' => 'delivery_guy_assigned',
-                'title' => $title,
-                'message' => $message
-            ]);
-
-            $fcmService->sendFcmNotification(
-                $deliveryGuy->user_id,
-                $title,
-                $message,
-                [
-                    'related_id' => (string)$order->id,
-                    'related_type' => 'delivery_guy_assigned'
-                ]
-            );
-
             return true; // نجح التعيين
         }
         return false;
@@ -75,6 +52,7 @@ trait ShefaaTrait
         $ordersCountFromThisPharmacy = Order::where('user_id', $userId)
             ->where('pharmacy_id', $pharmacyId)
             ->where('order_status', 'delivered')
+            ->where('total_price', '>=', 50000)
             ->count();
 
         if ($ordersCountFromThisPharmacy > 0 && $ordersCountFromThisPharmacy % 2 == 0) {
@@ -83,6 +61,7 @@ trait ShefaaTrait
 
             Coupon::create([
                 'user_id' => $userId,
+                'pharmacy_id' => $pharmacyId,
                 'code' => $code,
                 'discount_percentage' => 20,
                 'is_used' => false,

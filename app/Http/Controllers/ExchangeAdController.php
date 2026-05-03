@@ -20,7 +20,7 @@ class ExchangeAdController extends Controller
     {
         $user = auth()->user();
 
-        if (!$user) {
+        if (! $user) {
             return $this->ErrorResponse(__('admin.unauthorized'), 401);
         }
 
@@ -41,7 +41,7 @@ class ExchangeAdController extends Controller
             ->inRandomOrder()
             ->first();
 
-        if (!$specialist) {
+        if (! $specialist) {
             return $this->ErrorResponse(__('ad.no_specialist'), 404);
         }
 
@@ -50,7 +50,7 @@ class ExchangeAdController extends Controller
         $imagePath = null;
         if ($request->hasFile('image')) {
             $path = $request->file('image')->store('exchangeAds', 'public');
-            $imagePath = asset('storage/' . $path);
+            $imagePath = asset('storage/'.$path);
         }
 
         try {
@@ -65,7 +65,7 @@ class ExchangeAdController extends Controller
                     'ad_type' => $request->ad_type,
                     'security_check_status' => null,
                     'is_showing' => null,
-                    'notes' => $request->notes
+                    'notes' => $request->notes,
                 ]);
 
                 $title = __('ad.title');
@@ -74,7 +74,7 @@ class ExchangeAdController extends Controller
                 Notification::create([
                     'user_id' => $specialist->user_id,
                     'related_id' => $ad->id,
-                    'related_ad' => 'ad_verification',
+                    'related_type' => 'ad_verification',
                     'title' => $title,
                     'message' => $message
                 ]);
@@ -95,6 +95,7 @@ class ExchangeAdController extends Controller
                     'related_type' => 'ad_verification'
                 ]
             );
+
             return $this->SuccessResponse(
                 $result['ad'],
                 __('ad.ad_submitted'),
@@ -109,7 +110,7 @@ class ExchangeAdController extends Controller
     {
         $user = auth()->user();
 
-        if (!$user) {
+        if (! $user) {
             return $this->ErrorResponse(__('admin.unauthorized'), 401);
         }
 
@@ -123,13 +124,17 @@ class ExchangeAdController extends Controller
         }
 
         $formattedAds = $myAds->map(function ($ad) {
+            $status = __('ad.pending');
+            if ($ad->security_check_status === true) $status = __('ad.verified');
+            if ($ad->security_check_status === false) $status = __('ad.rejected');
+
             return [
                 'id' => $ad->id,
                 'medicine_name' => $ad->medicine_name,
                 'image' => $ad->image,
                 'price' => $ad->price,
                 'ad_type' => $ad->ad_type,
-                'status' => is_null($ad->security_check_status) ? __('ad.pending') : ($ad->security_check_status ? __('ad.verified') : __('ad.rejected')),
+                'status' => $status,
                 'availability' => $ad->is_showing === 1 ? __('ad.available') : __('ad.taken_or_hidden'),
                 'specialist_at' => $ad->specialist->pharmacy_name ?? $ad->specialist->user->username,
                 'location' => $ad->specialist->pharmacy_address ?? $ad->governorate,
@@ -147,7 +152,6 @@ class ExchangeAdController extends Controller
             ->where('is_showing', 1)
             ->latest();
 
-        // عرض إعلانات محافظة المستخدم إذا لم يحدد غيرها
         $governorate = $request->governorate ?? (auth()->user() ? auth()->user()->governorate : null);
 
         if ($governorate) {
@@ -155,7 +159,7 @@ class ExchangeAdController extends Controller
         }
 
         if ($request->filled('medicine_name')) {
-            $query->where('medicine_name', 'like', '%' . $request->medicine_name . '%');
+            $query->where('medicine_name', 'like', '%'.$request->medicine_name.'%');
         }
 
         if ($request->filled('ad_type')) {
@@ -164,10 +168,8 @@ class ExchangeAdController extends Controller
 
         $ads = $query->get();
 
-        $govKey = $governorate ? strtolower(str_replace([' ', '-'], '_', $governorate)) : null;
-        $locationLabel = $govKey ? __("governorates.{$govKey}") : __('citizen.your_area');
-
         if ($ads->isEmpty()) {
+            $locationLabel = $governorate ? $governorate : __('citizen.your_area');
             return $this->SuccessResponse([], __('ad.no_ads_in_location', ['location' => $locationLabel]), 200);
         }
 
@@ -180,10 +182,10 @@ class ExchangeAdController extends Controller
                 'ad_type' => $ad->ad_type,
                 'governorate' => $ad->governorate,
                 'notes' => $ad->notes,
-                'verification'  => __('ad.verified_by_specialist'),
-                'collect_from'  => $ad->specialist->pharmacy_name ?? $ad->specialist->user->username,
-                'address'       => $ad->specialist->pharmacy_address ?? $ad->specialist->governorate,
-                'availability' => $ad->is_showing === 1 ? __('ad.available') : __('ad.taken'),
+                'verification' => __('ad.verified_by_specialist'),
+                'collect_from' => $ad->specialist->pharmacy_name ?? $ad->specialist->user->username,
+                'address' => $ad->specialist->pharmacy_address ?? $ad->specialist->governorate,
+                'availability' => $ad->is_showing === 1 ? __('ad.available') : __('ad.taken_or_hidden'),
                 'posted_at' => $ad->created_at->diffForHumans(),
             ];
         });
@@ -195,12 +197,12 @@ class ExchangeAdController extends Controller
     {
         $user = auth()->user();
 
-        if (!$user) {
+        if (! $user) {
             return $this->ErrorResponse(__('admin.unauthorized'), 401);
         }
 
         $validation = Validator::make($request->all(), [
-            'ad_id' => 'required|integer|exists:exchange_ads,id'
+            'ad_id' => 'required|integer|exists:exchange_ads,id',
         ]);
 
         if ($validation->fails()) {
@@ -211,7 +213,7 @@ class ExchangeAdController extends Controller
             ->where('user_id', $user->id)
             ->first();
 
-        if (!$ad) {
+        if (! $ad) {
             return $this->ErrorResponse(__('ad.ad_not_found'), 404);
         }
 
@@ -225,6 +227,7 @@ class ExchangeAdController extends Controller
         }
 
         $ad->delete();
+
         return $this->SuccessResponse(null, __('ad.deleted_success'), 200);
     }
 }

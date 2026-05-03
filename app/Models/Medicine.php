@@ -15,6 +15,7 @@ class Medicine extends Model
         'price',
         'image',
         'category',
+        'requires_prescription',
         'quantity_available',
         'expiration_date',
         'description',

@@ -40,7 +40,7 @@ class ReviewController extends Controller
             return $this->ErrorResponse(__('medicine.no_pharmcy_found'), 404);
         }
 
-        // التحقق من أن المواطن قد اشترى فعلاً من هذه الصيدلية (لضمان المصداقية)
+        // التحقق من أن المواطن قد اشترى فعلاً من هذه الصيدلية لضمان المصداقية
         $hasOrdered = Order::where('user_id', $user->id)
             ->where('pharmacy_id', $request->pharmacy_id)
             ->where('order_status', 'delivered')
@@ -60,7 +60,10 @@ class ReviewController extends Controller
                 ]);
 
                 $title = __('review.new_rate');
-                $message = __('review.new_rate_message', ['name' => $user->username, 'rate' => $request->rate]);
+                $message = __('review.new_rate_message', [
+                    'name' => $user->username,
+                    'rate' => $request->rate
+                ]);
 
                 Notification::create([
                     'user_id'      => $pharmacy->user_id,
@@ -88,6 +91,7 @@ class ReviewController extends Controller
             );
 
             return $this->SuccessResponse($result['newReview'], __('review.review_completed'), 201);
+
         } catch (\Exception $e) {
             return $this->ErrorResponse(__('review.failed_add_review') . $e->getMessage(), 500);
         }

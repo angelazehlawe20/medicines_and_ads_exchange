@@ -97,4 +97,10 @@ class User extends Authenticatable
     {
         return $this->hasMany(Coupon::class);
     }
+
+    public function favorites()
+    {
+        // علاقة "كثير إلى كثير" لربط المستخدم بالأدوية التي فضلها
+        return $this->belongsToMany(Medicine::class, 'favorites');
+    }
 }

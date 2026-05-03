@@ -35,13 +35,15 @@ class AuthController extends Controller
             case 'pharmacy':
                 $rules = array_merge($rules, [
                     'pharmacy_name' => 'required|string|max:255',
+                    'license_image' => 'required|image|mimes:jpeg,png,jpg|max:2048',
+                    'is_specialist' => 'nullable|boolean',
                 ]);
                 break;
 
             case 'specialist':
                 $rules = array_merge($rules, [
-                    'pharmacy_name' => 'nullable|string|max:255',
-                    'pharmacy_address' => 'nullable|string|max:255',
+                    'pharmacy_name' => 'required|string|max:255',
+                    'pharmacy_address' => 'required|string|max:255',
                 ]);
                 break;
         }
@@ -67,9 +69,16 @@ class AuthController extends Controller
                         'address' => $request->address,
                     ]);
                 } elseif ($request->role === 'pharmacy') {
+                    $licensePath = null;
+                    if ($request->hasFile('license_image')) {
+                        $licensePath = $request->file('license_image')->store('licenses', 'public');
+                    }
+
                     $user->pharmacy()->create([
                         'pharmacy_name' => $request->pharmacy_name,
                         'governorate' => $request->governorate,
+                        'license_image' => $licensePath,
+                        'is_specialist' => $request->boolean('is_specialist', false),
                     ]);
                 } elseif ($request->role === 'specialist') {
                     $user->specialist()->create([
@@ -86,10 +95,10 @@ class AuthController extends Controller
                 }
 
                 $token = $user->createToken('auth_token')->plainTextToken;
-                return $this->SuccessResponse(['token' => $token, 'user' => $user], __('authTranslate.registered_success'), 201);
+                return $this->SuccessResponse(['token' => $token, 'user' => $user], __('auth.registered_success'), 201);
             });
         } catch (\Exception $e) {
-            return $this->ErrorResponse(__('authTranslate.registration_failed') . $e->getMessage(), 500);
+            return $this->ErrorResponse(__('auth.registration_failed') . $e->getMessage(), 500);
         }
     }
 
@@ -108,11 +117,11 @@ class AuthController extends Controller
         $user = User::where('username', $request->username)->first();
 
         if (!$user || !Hash::check($request->password, $user->password)) {
-            return $this->ErrorResponse(__('authTranslate.invalid_data'), 401);
+            return $this->ErrorResponse(__('auth.invalid_data'), 401);
         }
 
         if ($user->account_status !== 1) {
-            return $this->ErrorResponse(__('authTranslate.banned'), 403);
+            return $this->ErrorResponse(__('auth.banned'), 403);
         }
 
         if ($request->filled('fcm_token')) {
@@ -121,7 +130,7 @@ class AuthController extends Controller
 
         $token = $user->createToken('auth_token')->plainTextToken;
 
-        return $this->SuccessResponse(['token' => $token, 'role' => $user->role], __('authTranslate.login_success'), 200);
+        return $this->SuccessResponse(['token' => $token, 'role' => $user->role], __('auth.login_success'), 200);
     }
 
     public function getMyProfile()
@@ -142,7 +151,7 @@ class AuthController extends Controller
         };
 
         $userData = User::with($relation)->find($user->id);
-        return $this->SuccessResponse($userData, __('authTranslate.your_profile'), 200);
+        return $this->SuccessResponse($userData, __('auth.your_profile'), 200);
     }
 
     public function updateMyProfile(Request $request)
@@ -165,12 +174,16 @@ class AuthController extends Controller
                 $rules = array_merge($rules, ['address' => 'nullable|string']);
                 break;
             case 'pharmacy':
-                $rules = array_merge($rules, ['pharmacy_name' => 'nullable|string|max:255']);
+                $rules = array_merge($rules, [
+                    'pharmacy_name' => 'nullable|string|max:255',
+                    'license_image' => 'nullable|image|mimes:jpeg,png,jpg|max:2048',
+                    'is_specialist' => 'nullable|boolean'
+                ]);
                 break;
             case 'specialist':
                 $rules = array_merge($rules, [
-                    'pharmacy_name' => 'nullable|string|max:255',
-                    'pharmacy_address' => 'nullable|string|max:255'
+                    'pharmacy_name' =>'required|string|max:255',
+                    'pharmacy_address' => 'required|string|max:255'
                 ]);
                 break;
         }
@@ -187,7 +200,14 @@ class AuthController extends Controller
                 if ($user->role === 'citizen' && $user->citizen) {
                     $user->citizen->update($request->only(['address']));
                 } elseif ($user->role === 'pharmacy' && $user->pharmacy) {
-                    $user->pharmacy->update($request->only(['pharmacy_name', 'governorate']));
+                    $data = $request->only(['pharmacy_name', 'governorate', 'is_specialist']);
+
+                    if ($request->hasFile('license_image')) {
+                        $path = $request->file('license_image')->store('licenses', 'public');
+                        $data['license_image'] = $path;
+                    }
+
+                    $user->pharmacy->update($data);
                 } elseif ($user->role === 'specialist' && $user->specialist) {
                     $user->specialist->update($request->only(['pharmacy_name', 'pharmacy_address', 'governorate']));
                 } elseif ($user->role === 'delivery' && $user->delivery) {
@@ -195,9 +215,9 @@ class AuthController extends Controller
                 }
             });
 
-            return $this->SuccessResponse($user->load($user->role), __('authTranslate.updated_success'), 200);
+            return $this->SuccessResponse($user->load($user->role), __('auth.updated_success'), 200);
         } catch (\Exception $e) {
-            return $this->ErrorResponse('Update failed: ' . $e->getMessage(), 500);
+            return $this->ErrorResponse(__('auth.update_failed') . $e->getMessage(), 500);
         }
     }
 }
